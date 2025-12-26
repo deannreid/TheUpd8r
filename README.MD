@@ -96,7 +96,7 @@ If anything looks wrong at any point, it stops.
 ```text
 .
 ├── TheUpd8r.py          # Runtime updater (executed by systemd)
-├── setup_the_upd8r.py   # Installer / updater / remover
+├── Setup.py             # Installer / updater / remover
 └── README.md
 ```
 
@@ -105,7 +105,7 @@ If anything looks wrong at any point, it stops.
 ## 🚀 Installation
 
 ```bash
-sudo python3 setup_the_upd8r.py
+sudo python3 Setup.py
 ```
 
 You will be prompted once for proxy details. These are:
@@ -126,7 +126,7 @@ On completion:
 ## 🔄 Updating TheUpd8r
 
 ```bash
-sudo python3 setup_the_upd8r.py --update
+sudo python3 Setup.py --update
 ```
 
 You may choose to:
@@ -141,7 +141,7 @@ Binary hashes and the systemd unit will be updated automatically.
 ## 🗑️ Removal
 
 ```bash
-sudo python3 setup_the_upd8r.py --remove
+sudo python3 Setup.py --remove
 ```
 
 This will:
