@@ -266,7 +266,7 @@ def main():
     user = decrypt("user")
     password = decrypt("password")
 
-    proxy_url = f"{scheme}://{user}:{password}@{host}:{port}/"
+    proxy_url = f"{scheme}://{user}:{password}@{host}:{port}"
 
     env = {
         "DEBIAN_FRONTEND": "noninteractive",
