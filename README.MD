@@ -55,9 +55,11 @@ It is designed to run in **hostile-by-default** conditions and will refuse to op
 
   * Decrypted only in memory, only when needed
 * 🧹 **No plaintext secrets on disk**
-* ⚙️ **Invocation-based APT proxy configuration**
+* ⚙️ **Runtime-only APT proxy configuration**
 
-  * No temporary files under `/etc/apt`
+  * Root-only (`0600`) config under `/run`, passed via `APT_CONFIG`
+  * Removed after every run; nothing under `/etc/apt`
+  * Credentials never appear on the command line (`/proc/<pid>/cmdline`)
 * 🧪 **Minimal, sanitised execution environment**
 * 🔁 **Concurrency protection**
 
@@ -83,8 +85,8 @@ It is designed to run in **hostile-by-default** conditions and will refuse to op
    apt-get -y dist-upgrade
    ```
 
-   using invocation-based proxy settings
-8. 🧼 Clears sensitive values
+   using a root-only, run-scoped `APT_CONFIG` proxy file
+8. 🧼 Clears sensitive values and removes the proxy file
 9. 🤫 Exits quietly
 
 ---

@@ -50,6 +50,11 @@ CONFIG_PATH = Path(
 ALLOW_REPIN = os.environ.get("THEUPD8R_ALLOW_REPIN") == "1"
 LOCK_PATH = "/run/theupd8r.lock"
 
+# Proxy settings are handed to apt via this root-only file (APT_CONFIG),
+# never on the command line, where they would be world-readable in
+# /proc/<pid>/cmdline for the lifetime of every apt run.
+APT_CONF_PATH = "/run/theupd8r.apt.conf"
+
 # Package name prefixes treated as kernel updates (require a writable /boot).
 KERNEL_PKG_PREFIXES = (
     "linux-image",
@@ -238,10 +243,10 @@ def verify_binaries(cfg: dict):
 # Kernel update deferral
 # --------------------------------------------------------------------
 
-def pending_kernel_updates(apt: str, opts: list, env: dict) -> list:
+def pending_kernel_updates(apt: str, env: dict) -> list:
     """Return kernel package names a dist-upgrade would install."""
     res = subprocess.run(
-        [apt, *opts, "-s", "-y", "dist-upgrade"],
+        [apt, "-s", "-y", "dist-upgrade"],
         env=env,
         capture_output=True,
         text=True,
@@ -346,49 +351,73 @@ def main():
 
     proxy_url = f"{scheme}://{user}:{password}@{host}:{port}"
 
+    if '"' in proxy_url or "\n" in proxy_url:
+        raise SystemExit(
+            "[TheUpd8r] ERROR: Proxy credentials contain unsupported characters."
+        )
+
     env = {
         "DEBIAN_FRONTEND": "noninteractive",
         "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME": "/nonexistent",
         "LANG": "C",
         "LC_ALL": "C",
+        "APT_CONFIG": APT_CONF_PATH,
     }
 
     apt = cfg["binaries"]["apt_get"]["path"]
-    opts = [
-        "-o", f"Acquire::http::Proxy={proxy_url}",
-        "-o", f"Acquire::https::Proxy={proxy_url}",
-    ]
 
-    subprocess.run(
-        [apt, *opts, "update"],
-        env=env,
-        check=True,
-        close_fds=True,
-        cwd="/",
+    conf_fd = os.open(
+        APT_CONF_PATH,
+        os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
     )
-
-    kernel_pkgs = pending_kernel_updates(apt, opts, env)
-
-    if kernel_pkgs and not os.isatty(0):
-        # Unattended run: the boot mount is read-only here, so a kernel
-        # upgrade would fail mid-transaction. Defer everything and ask a
-        # human to run it from a login shell instead.
-        write_kernel_notice(kernel_pkgs)
-        print(
-            "[TheUpd8r] Kernel update pending "
-            f"({', '.join(sorted(kernel_pkgs))}). "
-            "Deferred: run 'sudo theUpd8r' from a login shell to apply it."
+    try:
+        os.write(
+            conf_fd,
+            (
+                f'Acquire::http::Proxy "{proxy_url}";\n'
+                f'Acquire::https::Proxy "{proxy_url}";\n'
+            ).encode("utf-8"),
         )
-    else:
+    finally:
+        os.close(conf_fd)
+
+    try:
         subprocess.run(
-            [apt, *opts, "-y", "dist-upgrade"],
+            [apt, "update"],
             env=env,
             check=True,
             close_fds=True,
             cwd="/",
         )
-        clear_kernel_notice()
+
+        kernel_pkgs = pending_kernel_updates(apt, env)
+
+        if kernel_pkgs and not os.isatty(0):
+            # Unattended run: the boot mount is read-only here, so a kernel
+            # upgrade would fail mid-transaction. Defer everything and ask a
+            # human to run it from a login shell instead.
+            write_kernel_notice(kernel_pkgs)
+            print(
+                "[TheUpd8r] Kernel update pending "
+                f"({', '.join(sorted(kernel_pkgs))}). "
+                "Deferred: run 'sudo theUpd8r' from a login shell to apply it."
+            )
+        else:
+            subprocess.run(
+                [apt, "-y", "dist-upgrade"],
+                env=env,
+                check=True,
+                close_fds=True,
+                cwd="/",
+            )
+            clear_kernel_notice()
+    finally:
+        try:
+            os.unlink(APT_CONF_PATH)
+        except FileNotFoundError:
+            pass
 
     # Best-effort secret minimisation
     proxy_url = None

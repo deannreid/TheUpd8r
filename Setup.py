@@ -203,7 +203,8 @@ def read_config() -> dict:
 
 def create_systemd_files(upd8r_hash: str, apt_hash: str):
     # Note:
-    # - TheUpd8r itself now uses invocation options for proxy; no need for /etc/apt/apt.conf.d writes.
+    # - TheUpd8r passes proxy settings via a root-only APT_CONFIG file under
+    #   /run (never on the command line); no writes under /etc/apt.
     # - Keep hardening reasonable: apt/dpkg will still need to write to system locations.
 
     service_content = f"""[Unit]
