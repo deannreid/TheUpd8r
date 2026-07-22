@@ -87,6 +87,28 @@ It is designed to run in **hostile-by-default** conditions and will refuse to op
 8. 🧼 Clears sensitive values
 9. 🤫 Exits quietly
 
+---
+
+## 🐧 Kernel Updates
+
+The unattended (timer) run **cannot apply kernel updates** — the boot
+mount is read-only in that context, and a failed kernel upgrade would
+leave dpkg in a broken state.
+
+Instead, when a kernel update is pending, the timer run:
+
+1. ⏸️ defers the upgrade entirely (nothing is partially applied),
+2. 📢 leaves a login notice (motd + profile.d):
+
+   ```text
+   *** Kernel update required ***
+   Run:  sudo theUpd8r
+   ```
+
+Running `sudo theUpd8r` from a login shell applies the full
+`dist-upgrade` (kernel included) in the user's context, then clears
+the notice on success.
+
 If anything looks wrong at any point, it stops.
 
 ---

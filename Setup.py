@@ -8,7 +8,9 @@ Usage:
     sudo python3 setup_the_upd8r.py --remove  # remove service, timer, config, files
 
 What it does (quietly):
-- Copies TheUpd8r.py from this directory to /usr/local/sbin/TheUpd8r.py
+- Copies theUpd8r.py from this directory to /usr/local/sbin/theUpd8r.py
+- Installs a `theUpd8r` command for manual runs (used to apply
+  deferred kernel updates from a login shell)
 - Prompts for proxy details (on install, or on update if requested)
 - Encrypts proxy info and stores in:
     /etc/theupd8r/theupd8r.env
@@ -55,12 +57,17 @@ CONFIG_FILE = ETC_DIR / "TheUpd8r_config.json"
 SYSTEMD_SERVICE = Path("/etc/systemd/system/theupd8r.service")
 SYSTEMD_TIMER = Path("/etc/systemd/system/theupd8r.timer")
 
-UPD8R_PATH = Path("/usr/local/sbin/TheUpd8r.py")
+UPD8R_PATH = Path("/usr/local/sbin/theUpd8r.py")
+WRAPPER_PATH = Path("/usr/local/sbin/theUpd8r")
 APT_GET_PATH = Path("/usr/bin/apt-get")
 
-# Source TheUpd8r.py (same dir as this script)
+# Login notices left behind by TheUpd8r when a kernel update is pending
+MOTD_NOTICE = Path("/etc/update-motd.d/99-theupd8r-kernel")
+PROFILE_NOTICE = Path("/etc/profile.d/theupd8r-kernel-notice.sh")
+
+# Source theUpd8r.py (same dir as this script)
 SETUP_DIR = Path(__file__).resolve().parent
-SRC_UPD8R_PATH = SETUP_DIR / "TheUpd8r.py"
+SRC_UPD8R_PATH = SETUP_DIR / "theUpd8r.py"
 
 
 # --------------------------------------------------------------------
@@ -156,7 +163,20 @@ def install_upd8r() -> str:
         raise SystemExit(f"[ERROR] Source TheUpd8r.py not found at: {SRC_UPD8R_PATH}")
     shutil.copy2(SRC_UPD8R_PATH, UPD8R_PATH)
     os.chmod(UPD8R_PATH, 0o700)
+    install_wrapper()
     return sha256_file(UPD8R_PATH)
+
+
+def install_wrapper():
+    """Install the `theUpd8r` command used for manual (kernel) updates."""
+    WRAPPER_PATH.write_text(
+        "#!/bin/sh\n"
+        f'exec /usr/bin/python3 {UPD8R_PATH} "$@"\n',
+        encoding="utf-8",
+    )
+    # Root-only: regular users cannot execute (or even read) the command.
+    os.chmod(WRAPPER_PATH, 0o700)
+    print(f"[*] Installed command: {WRAPPER_PATH} (run manually with: sudo theUpd8r)")
 
 
 def write_config(var_map: dict, upd8r_hash: str, apt_hash: str):
@@ -263,7 +283,8 @@ def remove_everything():
         )
 
     # Remove files (ignore if missing)
-    for p in (SYSTEMD_SERVICE, SYSTEMD_TIMER, CONFIG_FILE, ENV_FILE, KEY_FILE, UPD8R_PATH):
+    for p in (SYSTEMD_SERVICE, SYSTEMD_TIMER, CONFIG_FILE, ENV_FILE, KEY_FILE,
+              UPD8R_PATH, WRAPPER_PATH, MOTD_NOTICE, PROFILE_NOTICE):
         try:
             if p.exists():
                 p.unlink()

@@ -18,6 +18,12 @@ If verification fails, TheUpd8r will stop.
 If updates fail, it will stop.
 If everything succeeds, it will exit quietly.
 
+Kernel updates are the one exception: the unattended (systemd) run
+cannot apply them because the boot mount is read-only in that context.
+When one is pending, the unattended run defers the upgrade and leaves
+a login notice asking an administrator to run `sudo theUpd8r` from a
+shell, where the update is applied normally.
+
 No interaction is required.
 No interaction is offered.
 This is working as intended.
@@ -43,6 +49,20 @@ CONFIG_PATH = Path(
 )
 ALLOW_REPIN = os.environ.get("THEUPD8R_ALLOW_REPIN") == "1"
 LOCK_PATH = "/run/theupd8r.lock"
+
+# Package name prefixes treated as kernel updates (require a writable /boot).
+KERNEL_PKG_PREFIXES = (
+    "linux-image",
+    "linux-headers",
+    "linux-modules",
+    "linux-generic",
+    "linux-signed",
+    "linux-virtual",
+)
+
+# Login notices shown while a kernel update is pending.
+MOTD_NOTICE = Path("/etc/update-motd.d/99-theupd8r-kernel")
+PROFILE_NOTICE = Path("/etc/profile.d/theupd8r-kernel-notice.sh")
 
 
 # --------------------------------------------------------------------
@@ -84,7 +104,10 @@ def check_secure_dir(path: Path, desc: str):
         )
 
 
-def open_secure_ro(path: Path, desc: str) -> int:
+def open_secure_ro(path: Path, desc: str, require_private: bool = True) -> int:
+    # require_private=True  : secrets — no group/other access at all.
+    # require_private=False : binaries — group/other may read/execute
+    #                         (e.g. apt-get is 0755), but never write.
     try:
         fd = os.open(
             path,
@@ -106,7 +129,9 @@ def open_secure_ro(path: Path, desc: str) -> int:
         raise SystemExit(f"[TheUpd8r] ERROR: {desc} not owned by root: {path}")
 
     mode = stat.S_IMODE(st.st_mode)
-    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+    forbidden = (stat.S_IRWXG | stat.S_IRWXO) if require_private \
+        else (stat.S_IWGRP | stat.S_IWOTH)
+    if mode & forbidden:
         os.close(fd)
         raise SystemExit(
             f"[TheUpd8r] ERROR: {desc} has insecure permissions: {oct(mode)}"
@@ -157,7 +182,7 @@ def verify_binaries(cfg: dict):
         path = Path(info["path"])
         expected = info["sha256"]
 
-        fd = open_secure_ro(path, f"binary {name}")
+        fd = open_secure_ro(path, f"binary {name}", require_private=False)
         try:
             actual = sha256_fd(fd)
         finally:
@@ -207,6 +232,59 @@ def verify_binaries(cfg: dict):
         cfg["binaries"][name]["sha256"] = actual
         atomic_write_config(cfg)
         print(f"[TheUpd8r] Re-pinned hash for {name}.")
+
+
+# --------------------------------------------------------------------
+# Kernel update deferral
+# --------------------------------------------------------------------
+
+def pending_kernel_updates(apt: str, opts: list, env: dict) -> list:
+    """Return kernel package names a dist-upgrade would install."""
+    res = subprocess.run(
+        [apt, *opts, "-s", "-y", "dist-upgrade"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        close_fds=True,
+        cwd="/",
+    )
+    pkgs = []
+    for line in res.stdout.splitlines():
+        if line.startswith("Inst "):
+            name = line.split()[1]
+            if name.startswith(KERNEL_PKG_PREFIXES):
+                pkgs.append(name)
+    return pkgs
+
+
+def write_kernel_notice(pkgs: list):
+    body = (
+        "\n"
+        "*** Kernel update required ***\n"
+        f"Pending: {', '.join(sorted(pkgs))}\n"
+        "TheUpd8r cannot apply kernel updates unattended\n"
+        "(the boot mount is read-only in that context).\n"
+        "Run:  sudo theUpd8r\n"
+        "\n"
+    )
+    if MOTD_NOTICE.parent.is_dir():
+        MOTD_NOTICE.write_text(
+            "#!/bin/sh\ncat <<'EOF'" + body + "EOF\n", encoding="utf-8"
+        )
+        os.chmod(MOTD_NOTICE, 0o755)
+    PROFILE_NOTICE.write_text(
+        "cat <<'EOF'" + body + "EOF\n", encoding="utf-8"
+    )
+    os.chmod(PROFILE_NOTICE, 0o644)
+
+
+def clear_kernel_notice():
+    for p in (MOTD_NOTICE, PROFILE_NOTICE):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
 
 
 # --------------------------------------------------------------------
@@ -290,13 +368,27 @@ def main():
         cwd="/",
     )
 
-    subprocess.run(
-        [apt, *opts, "-y", "dist-upgrade"],
-        env=env,
-        check=True,
-        close_fds=True,
-        cwd="/",
-    )
+    kernel_pkgs = pending_kernel_updates(apt, opts, env)
+
+    if kernel_pkgs and not os.isatty(0):
+        # Unattended run: the boot mount is read-only here, so a kernel
+        # upgrade would fail mid-transaction. Defer everything and ask a
+        # human to run it from a login shell instead.
+        write_kernel_notice(kernel_pkgs)
+        print(
+            "[TheUpd8r] Kernel update pending "
+            f"({', '.join(sorted(kernel_pkgs))}). "
+            "Deferred: run 'sudo theUpd8r' from a login shell to apply it."
+        )
+    else:
+        subprocess.run(
+            [apt, *opts, "-y", "dist-upgrade"],
+            env=env,
+            check=True,
+            close_fds=True,
+            cwd="/",
+        )
+        clear_kernel_notice()
 
     # Best-effort secret minimisation
     proxy_url = None
